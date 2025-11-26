@@ -11,7 +11,11 @@ class Settings:
 
     BASE_PATH = Path(__file__).parent.parent
     DATA_FILE_PATH = BASE_PATH / "data/raw/data.json"
-    LLM_CONFIG = {}
+    LLM_CONFIG = {
+        "model_name": "facebook/bart-large-cnn",
+        "max_new_tokens": 50
+    }
+    LOG_CONFIG = {}
     BATCH_SIZE = 32
     NUM_EPOCHS = 10
     LEARNING_RATE = 2e-5

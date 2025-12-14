@@ -19,9 +19,9 @@ graph TB
     
     subgraph "Core Model Components"
         J[BERTEmbedder] --> K[sentence-transformers]
-        L[DimensionalityReducer] --> M[UMAP]
-        N[DocumentClusterer] --> O[HDBSCAN]
-        P[CTFIDFVectorizer] --> Q[CountVectorizer]
+        L[DimensionalityReducer] --> M[UMAP(Default)]
+        N[DocumentClusterer] --> O[HDBSCAN(Default)]
+        P[CTFIDFVectorizer] --> Q[CountVectorizer(Default)]
     end
     
     subgraph "Main Model Pipeline"

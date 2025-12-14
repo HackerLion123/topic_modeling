@@ -4,6 +4,7 @@
 ## Embeding Model
 
 
+## Dimensionality Reduction
 
 
 ## Clustering
@@ -47,3 +48,4 @@
 - **After UMAP**: HDBSCAN (best combination)
 - **After PCA**: K-Means or HDBSCAN
 
+## Model Labeling

@@ -17,14 +17,18 @@ from typing import List, Dict, Tuple, Optional, Union, Literal
 from dataclasses import dataclass
 from collections import Counter
 
-from transformers import AutoTokenizer, AutoModel
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.preprocessing import normalize
 from sklearn.decomposition import PCA, TruncatedSVD
 from sklearn.manifold import TSNE
 from sklearn.cluster import KMeans, DBSCAN
-import umap
+
+from sentence_transformers import SentenceTransformer
+
+
 import hdbscan
+import umap
+import json
 
 from src.helper.utlis import get_device
 
@@ -39,13 +43,10 @@ class TextEmbedder:
     """Text embedding for topic modeling using encoder models"""
     
     def __init__(self) -> None:
-        pass
+        self.model = SentenceTransformer("Qwen/Qwen3-Embedding-0.6B")
     
     def embed(
-        self,
-        documents: List[str],
-        batch_size: int = 32,
-        max_length: int = 512
+        self
     ) -> np.ndarray:
         """
         Generate embeddings for a list of documents.
@@ -57,7 +58,7 @@ class TextEmbedder:
         Returns:
             Numpy array of embeddings
         """
-        pass
+        self.model
     
 
 class DimensionalityReducer:
@@ -312,9 +313,6 @@ class CTFIDFVectorizer:
         """
         pass
         
-    
-
-
 class BERTTopicModel:
     """
     Complete BERT-based topic modeling pipeline.
@@ -339,46 +337,61 @@ class BERTTopicModel:
     
     def __init__(
         self,
-        dim_reduction_method: Literal['umap', 'pca', 'tsne', 'svd'] = 'umap',
-        clustering_method: Literal['hdbscan', 'kmeans', 'dbscan', 'agglomerative'] = 'hdbscan',
-        n_components: int = 5,
-        n_clusters: Optional[int] = None,
+        embedding_model_config: Optional[Dict] = None,
+        dr_config: Optional[Dict] = None,
+        clustering_config: Optional[Dict] = None,
+        c_tfidf_config: Optional[Dict] = None,
         random_state: int = 42,
-        dim_reduction_params: Optional[Dict] = None,
-        clustering_params: Optional[Dict] = None
+        verbose: bool = True
     ):
         """
         Initialize the topic model.
         
         Args:
-            dim_reduction_method: Method for dimensionality reduction
-            clustering_method: Method for clustering
-            n_components: Number of dimensions for reduction
-            n_clusters: Number of clusters (required for kmeans/agglomerative)
+            embedding_model_config: Configuration for embedding model
+            dr_config: Configuration for dimensionality reduction
+            clustering_config: Configuration for clustering
+            c_tfidf_config: Configuration for c-TF-IDF
             random_state: Random state for reproducibility
-            dim_reduction_params: Additional parameters for dim reduction
-            clustering_params: Additional parameters for clustering
+            verbose: Whether to print verbose output
         """
-        self.dim_reduction_method = dim_reduction_method
-        self.clustering_method = clustering_method
-        self.n_components = n_components
-        self.n_clusters = n_clusters
+        # Use provided configs or defaults from config
+        from src.config import config as default_config
+        
+        self.embedding_config = embedding_model_config or default_config.embedding_model_config
+        self.dr_config = dr_config or default_config.dr_config
+        self.clustering_config = clustering_config or default_config.clustering_config
+        self.c_tfidf_config = c_tfidf_config or default_config.c_tfidf_config
         self.random_state = random_state
+        self.verbose = verbose
         
-        self.embedder = None  # Initialize in actual implementation
+        # Extract configurations
+        dr_method = self.dr_config.get('model', 'umap')
+        n_components = self.dr_config.get('n_components', 5)
         
+        clustering_method = self.clustering_config.get('model', 'hdbscan')
+        n_clusters = self.clustering_config.get('n_clusters', None)
+        
+        # Initialize components
+        self.embedder = TextEmbedder()
+        
+        # Prepare DR params (exclude 'model' key)
+        dr_params = {k: v for k, v in self.dr_config.items() if k not in ['model', 'n_components']}
         self.dim_reducer = DimensionalityReducer(
-            method=dim_reduction_method,
+            method=dr_method,
             n_components=n_components,
             random_state=random_state,
-            **(dim_reduction_params or {})
+            **dr_params
         )
         
+        # Prepare clustering params (exclude 'model' and 'n_clusters' keys)
+        clustering_params = {k: v for k, v in self.clustering_config.items() 
+                           if k not in ['model', 'n_clusters']}
         self.clusterer = ClusteringModel(
             method=clustering_method,
             n_clusters=n_clusters,
             random_state=random_state,
-            **(clustering_params or {})
+            **clustering_params
         )
         
         self.ctfidf = CTFIDFVectorizer()
@@ -391,18 +404,27 @@ class BERTTopicModel:
         self.topic_words_ = None
         self.documents_ = None
         
-        logger.info(f"Initialized BERTTopicModel:")
-        logger.info(f"  - Dimensionality Reduction: {dim_reduction_method.upper()}")
-        logger.info(f"  - Clustering: {clustering_method.upper()}")
-        if n_clusters:
-            logger.info(f"  - Number of clusters: {n_clusters}")
+        if self.verbose:
+            logger.info(f"Initialized BERTTopicModel:")
+            logger.info(f"  - Embedding Model: {self.embedding_config.get('model_name', 'N/A')}")
+            logger.info(f"  - Dimensionality Reduction: {dr_method.upper()}")
+            logger.info(f"  - Clustering: {clustering_method.upper()}")
+            if n_clusters:
+                logger.info(f"  - Number of clusters: {n_clusters}")
         
-    def fit(self, documents: List[str]) -> 'BERTTopicModel':
+    def fit(
+        self, 
+        documents: List[str],
+        batch_size: Optional[int] = None,
+        max_length: Optional[int] = None
+    ) -> 'BERTTopicModel':
         """
         Fit the topic model on documents.
         
         Args:
             documents: List of documents to model
+            batch_size: Batch size for embedding (defaults to config)
+            max_length: Max token length (defaults to config)
             
         Returns:
             Self for chaining
@@ -412,22 +434,30 @@ class BERTTopicModel:
         
         self.documents_ = documents
         
+        # Get batch_size and max_length from config if not provided
+        batch_size = batch_size or self.embedding_config.get('batch_size', 32)
+        max_length = max_length or self.embedding_config.get('max_length', 512)
+        
         # Step 1: Embed documents
         logger.info("Step 1/4: Generating embeddings")
-        # self.embeddings_ = self.embedder.embed(documents)  # Uncomment when embedder is implemented
+        self.embeddings_ = self.embedder.embed(
+            documents, 
+            batch_size=batch_size,
+            max_length=max_length
+        )
         
         # Step 2: Reduce dimensionality
         logger.info("Step 2/4: Reducing dimensionality")
-        # self.reduced_embeddings_ = self.dim_reducer.fit_transform(self.embeddings_)
+        self.reduced_embeddings_ = self.dim_reducer.fit_transform(self.embeddings_)
         
         # Step 3: Cluster documents
         logger.info("Step 3/4: Clustering documents")
-        # self.labels_ = self.clusterer.fit_predict(self.reduced_embeddings_)
+        self.labels_ = self.clusterer.fit_predict(self.reduced_embeddings_)
         
         # Step 4: Extract topics
         logger.info("Step 4/4: Extracting topic representations")
-        # ctfidf_matrix, feature_names = self.ctfidf.fit_transform(documents, self.labels_)
-        # self.topic_words_ = self.ctfidf.extract_topic_words(ctfidf_matrix, feature_names)
+        ctfidf_matrix, feature_names = self.ctfidf.fit_transform(documents, self.labels_)
+        self.topic_words_ = self.ctfidf.extract_topic_words(ctfidf_matrix, feature_names)
         
         logger.info("=" * 80)
         logger.info("✓ Topic modeling complete!")
@@ -519,9 +549,12 @@ class BERTTopicModel:
         if self.topic_words_ is None:
             raise ValueError("Model has not been fitted yet!")
         
+        dr_method = self.dr_config.get('model', 'unknown')
+        clustering_method = self.clustering_config.get('model', 'unknown')
+        
         print("\n" + "="*80)
         print(f"DISCOVERED {len(self.topic_words_)} TOPICS")
-        print(f"Method: {self.dim_reduction_method.upper()} + {self.clustering_method.upper()}")
+        print(f"Method: {dr_method.upper()} + {clustering_method.upper()}")
         print("="*80 + "\n")
         
         for topic_id, words in self.topic_words_.items():
@@ -555,17 +588,17 @@ class BERTTopicModel:
         
         # Save configuration
         config_info = {
-            'dim_reduction_method': self.dim_reduction_method,
-            'clustering_method': self.clustering_method,
-            'n_components': self.n_components,
-            'n_clusters': self.n_clusters
+            'embedding_model_config': self.embedding_config,
+            'dr_config': self.dr_config,
+            'clustering_config': self.clustering_config,
+            'c_tfidf_config': self.c_tfidf_config,
+            'random_state': self.random_state
         }
-        import json
+        
         with open(output_path / "config.json", 'w') as f:
             json.dump(config_info, f, indent=2)
         
         logger.info("Results saved successfully!")
-
 
 if __name__ == "__main__":
     # Example usage - Different configurations

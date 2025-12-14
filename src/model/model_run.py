@@ -52,20 +52,7 @@ def run_topic_modeling(
     # Step 2: Initialize model
     logger.info("\nStep 2: Initializing model")
     model = BERTTopicModel(
-        dim_reduction_method='umap',
-        clustering_method='hdbscan',
-        n_components=config.umap_config['n_components'],
-        random_state=config.random_state,
-        dim_reduction_params={
-            'n_neighbors': config.umap_config['n_neighbors'],
-            'min_dist': config.umap_config['min_dist'],
-            'metric': config.umap_config['metric']
-        },
-        clustering_params={
-            'min_cluster_size': config.hdbscan_config['min_cluster_size'],
-            'min_samples': config.hdbscan_config['min_samples'],
-            'metric': config.hdbscan_config['metric']
-        }
+        **config
     )
     
     # Step 3: Fit model
@@ -81,7 +68,6 @@ def run_topic_modeling(
     logger.info(f"\nStep 4: Saving results to {output_dir}")
     model.save(output_dir)
     
-    # Print topics
     logger.info("\n" + "="*80)
     model.print_topics(n_words=10)
     
@@ -93,7 +79,6 @@ def run_topic_modeling(
 
 
 if __name__ == "__main__":
-    # Run pipeline with default settings
     model = run_topic_modeling(
         text_column='text',
         max_documents=1000  # Limit for testing

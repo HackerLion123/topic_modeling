@@ -39,14 +39,30 @@ logger = logging.getLogger(__name__)
 class TextEmbedder:
     """Text embedding for topic modeling using encoder models"""
     
-    def __init__(self, **kwargs) -> None:
-        self.model_name = kwargs.get('model_name')
-        self.batch_size = kwargs.get('batch_size', 32) # Default batch size
-        self.max_length = kwargs.get('max_length', 512) # Default max token length
-        self.model = SentenceTransformer(self.model_name,local_files_only=True, backend='torch')
+    def __init__(self, model_name: str, **kwargs) -> None:
+        """
+        Initialize text embedder.
+        
+        Args:
+            model_name: Name of the sentence transformer model
+            **kwargs: Optional parameters (batch_size, max_length, verbose)
+        """
+        if not model_name:
+            raise ValueError("model_name is required")
+        
+        self.model_name = model_name
+        self.batch_size = kwargs.get('batch_size')
+        self.max_length = kwargs.get('max_length')
+        self.verbose = kwargs.get('verbose', True)
+        
+        self.model = SentenceTransformer(
+            self.model_name,
+            #local_files_only=True,
+            backend='torch'
+        )
     
     def embed(
-        self, documents: List[str]
+        self, docs: List[str]
     ) -> np.ndarray:
         """
         Generate embeddings for a list of documents.
@@ -56,7 +72,19 @@ class TextEmbedder:
         Returns:
             Numpy array of embeddings
         """
-        pass
+        encode_kwargs = {
+            'device': get_device(),
+            'show_progress_bar': self.verbose,
+            'normalize_embeddings': True
+        }
+        
+        # Only add if explicitly provided
+        if self.batch_size is not None:
+            encode_kwargs['batch_size'] = self.batch_size
+        if self.max_length is not None:
+            encode_kwargs['chunk_size'] = self.max_length
+            
+        return self.model.encode(docs, **encode_kwargs)
     
 
 class DimensionalityReducer:

@@ -21,7 +21,6 @@ class Settings:
             f"  dr_config: {self.dr_config}\n"
             f"  clustering_config: {self.clustering_config}\n"
             f"  c_tfidf_config: {self.c_tfidf_config}\n"
-            f"  random_state: {self.random_state}\n"
             f"  verbose: {self.verbose}"
         )
 
@@ -69,9 +68,9 @@ class Settings:
     }
     
     embedding_model_config: dict = {
-        "model_name": "Qwen/Qwen3-Embedding-0.6B", # Change as needed.
-        "batch_size": 32,
-        "max_length": 4096
+        "model_name": "sentence-transformers/all-MiniLM-L6-v2", #"Qwen/Qwen3-Embedding-0.6B", # Change as needed.
+        "batch_size": 32, # Adjust based on your hardware capabilities.
+        # "max_length": 512
     }
     
     dr_config: dict = { # Dimensionality Reduction config

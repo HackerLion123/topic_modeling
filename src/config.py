@@ -16,9 +16,34 @@ class Settings:
         "max_new_tokens": 50
     }
     LOG_CONFIG = {}
-    BATCH_SIZE = 32
-    NUM_EPOCHS = 10
-    LEARNING_RATE = 2e-5
+    
+    embedding_model_config = {
+        "model_name": "sentence-transformers/all-MiniLM-L6-v2",
+        "batch_size": 32,
+        "max_length": 512
+    }
+    
+    umap_config = {
+        "n_neighbors": 15,
+        "n_components": 5,
+        "min_dist": 0.0,
+        "metric": 'cosine'
+    }
+    
+    hdbscan_config = {
+        "min_cluster_size": 10,
+        "min_samples": 5,
+        "metric": 'euclidean',
+        "cluster_selection_method": 'eom'
+    }
+    
+    c_tfidf_config = {
+        "top_n_words": 10,
+        "ngram_range": (1, 2)
+    }
+    
+    random_state: int = 42
+    verbose: bool = True
 
 
 config = Settings()

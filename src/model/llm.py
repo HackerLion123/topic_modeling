@@ -5,28 +5,41 @@ import logging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def get_topic_representative_docs(df: pd.DataFrame, topic_id: int, n_docs: int = 5) -> list[str]:
-    """
-    Gets representative documents for a specific topic.
 
-    Args:
-        df (pd.DataFrame): The DataFrame with topic assignments.
-        topic_id (int): The ID of the topic.
-        n_docs (int, optional): The number of representative documents to return. Defaults to 5.
+class LLMTopicNamer:
+    """Class to name topics using a Large Language Model (LLM)"""
 
-    Returns:
-        list[str]: A list of representative documents.
-    """
-    pass
+    def __init__(self, model_name: str = ""):
+        """
+        Initialize the LLM topic namer.
 
-def generate_topic_labels(df: pd.DataFrame) -> dict[int, str]:
-    """
-    Generates descriptive labels for each topic using a language model.
+        Args:
+            model_name: Name of the LLM model to use
+        """
+        self.model_name = model_name
+        self.nlp = pipeline("text-generation", model=model_name)
 
-    Args:
-        df (pd.DataFrame): The DataFrame with topic assignments and text data.
+    def name_topics(self, topics: pd.DataFrame) -> pd.DataFrame:
+        """
+        Name topics using the LLM.
 
-    Returns:
-        dict[int, str]: A dictionary mapping topic IDs to their generated labels.
-    """
-    pass
+        Args:
+            topics: DataFrame with topic information
+
+        Returns:
+            DataFrame with named topics
+        """
+        named_topics = []
+        for _, row in topics.iterrows():
+            topic_keywords = row['keywords']
+            prompt = f"Provide a concise and descriptive name for a topic with the following keywords: {topic_keywords}"
+            response = self.nlp(prompt, max_length=20, num_return_sequences=1)
+            topic_name = response[0]['generated_text'].strip()
+            named_topics.append({
+                'topic_id': row['topic_id'],
+                'topic_name': topic_name,
+                'keywords': topic_keywords
+            })
+            logging.info(f"Named topic {row['topic_id']}: {topic_name}")
+
+        return pd.DataFrame(named_topics)

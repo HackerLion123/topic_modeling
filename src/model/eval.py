@@ -11,6 +11,10 @@ from collections import Counter
 from sklearn.metrics import silhouette_score, davies_bouldin_score
 from sklearn.metrics.pairwise import cosine_similarity
 
+from src.config import config
+from src.helper.utlis import get_device
+
+logging.config.dictConfig(config.LOG_CONFIG)
 logger = logging.getLogger(__name__)
 
 

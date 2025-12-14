@@ -25,17 +25,14 @@ from sklearn.cluster import KMeans, DBSCAN
 
 from sentence_transformers import SentenceTransformer
 
-
 import hdbscan
 import umap
 import json
 
+from src.config import config
 from src.helper.utlis import get_device
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.config.dictConfig(config.LOG_CONFIG)
 logger = logging.getLogger(__name__)
 
 
@@ -94,7 +91,7 @@ class DimensionalityReducer:
     def _initialize_model(self):
         """Initialize the appropriate dimensionality reduction model."""
         if self.method == 'umap':
-            # Default UMAP parameters optimized for topic modeling
+            
             default_params = {
                 'n_neighbors': 15,
                 'min_dist': 0.0,
@@ -121,7 +118,6 @@ class DimensionalityReducer:
             logger.info(f"Initialized PCA with n_components={self.n_components}")
             
         elif self.method == 'tsne':
-            # t-SNE for non-linear reduction (primarily for visualization)
             default_params = {
                 'perplexity': 30,
                 'learning_rate': 200,
@@ -169,7 +165,6 @@ class DimensionalityReducer:
         
         logger.info(f"Dimensionality reduction complete: {reduced.shape}")
         
-        # Log explained variance for PCA/SVD
         if hasattr(self.model, 'explained_variance_ratio_'):
             total_variance = self.model.explained_variance_ratio_.sum()
             logger.info(f"Explained variance: {total_variance:.2%}")
@@ -186,7 +181,6 @@ class ClusteringModel:
         self,
         method: Literal['hdbscan', 'kmeans', 'dbscan', 'agglomerative'] = 'hdbscan',
         n_clusters: Optional[int] = None,
-        random_state: int = 42,
         **kwargs
     ):
         """
@@ -313,6 +307,11 @@ class CTFIDFVectorizer:
             config: Topic modeling configuration
         """
         pass
+    
+    def fit_transform(
+        self,
+        documents: List[str]) -> Tuple[np.ndarray, List[str]]:
+        pass
         
 class BERTTopicModel:
     """
@@ -433,37 +432,25 @@ class BERTTopicModel:
         logger.info(f"Starting topic modeling on {len(documents)} documents")
         logger.info("=" * 80)
         
-        self.documents_ = documents
+    
+    def topic_over_time(
+        self,
+        documents: List[str],
+        timestamps: List,
+        nr_bins: int = 10
+    ) -> pd.DataFrame:
+        """
+        Analyze topic prevalence over time.
         
-        # Get batch_size and max_length from config if not provided
-        batch_size = batch_size or self.embedding_config.get('batch_size', 32)
-        max_length = max_length or self.embedding_config.get('max_length', 512)
-        
-        # Step 1: Embed documents
-        logger.info("Step 1/4: Generating embeddings")
-        self.embeddings_ = self.embedder.embed(
-            documents, 
-            batch_size=batch_size,
-            max_length=max_length
-        )
-        
-        # Step 2: Reduce dimensionality
-        logger.info("Step 2/4: Reducing dimensionality")
-        self.reduced_embeddings_ = self.dim_reducer.fit_transform(self.embeddings_)
-        
-        # Step 3: Cluster documents
-        logger.info("Step 3/4: Clustering documents")
-        self.labels_ = self.clusterer.fit_predict(self.reduced_embeddings_)
-        
-        # Step 4: Extract topics
-        logger.info("Step 4/4: Extracting topic representations")
-        ctfidf_matrix, feature_names = self.ctfidf.fit_transform(documents, self.labels_)
-        self.topic_words_ = self.ctfidf.extract_topic_words(ctfidf_matrix, feature_names)
-        
-        logger.info("=" * 80)
-        logger.info("✓ Topic modeling complete!")
-        
-        return self
+        Args:
+            documents: List of documents
+            timestamps: Corresponding timestamps for documents
+            nr_bins: Number of time bins
+            
+        Returns:
+            DataFrame with topic prevalence over time
+        """
+        pass
     
     def get_topics(self) -> Dict[int, List[Tuple[str, float]]]:
         """
@@ -476,6 +463,7 @@ class BERTTopicModel:
             raise ValueError("Model has not been fitted yet!")
         
         return self.topic_words_
+    
     
     def get_topic_info(self) -> pd.DataFrame:
         """

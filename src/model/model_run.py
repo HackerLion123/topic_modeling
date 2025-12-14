@@ -10,10 +10,8 @@ from src.config import config
 from src.data.etl import load_data
 from src.model.bert import BERTTopicModel
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+
+logging.config.dictConfig(config.LOG_CONFIG)
 logger = logging.getLogger(__name__)
 
 

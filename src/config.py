@@ -28,21 +28,54 @@ class Settings:
     BASE_PATH = Path(__file__).parent.parent
     DATA_FILE_PATH = BASE_PATH / "data/raw/data.json"
     
-    SEED = 23
+    SEED: int= 23
     
-    LLM_CONFIG = {
+    LLM_CONFIG: dict = { # LLM to label topics
         "model_name": "Qwen/Qwen3-4B",  # Change as needed
     }
-    LOG_CONFIG = {}
+    LOG_CONFIG: dict = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "detailed": {
+                "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                "datefmt": "%Y-%m-%d %H:%M:%S"
+            },
+            "simple": {
+                "format": "%(levelname)s - %(message)s"
+            }
+        },
+        "handlers": {
+            "console": {                              # Info and above logs will be displayed on console.
+                "class": "logging.StreamHandler",
+                "level": "INFO",
+                "formatter": "simple",
+                "stream": "ext://sys.stdout"
+            },
+            "file": {                     # Debug and above(that is all logs) logs will be saved to a file.
+                "class": "logging.handlers.RotatingFileHandler",
+                "level": "DEBUG",
+                "formatter": "detailed",
+                "filename": str(BASE_PATH / "output/topic_modeling.log"),
+                "maxBytes": 10485760,  # 10MB
+                "backupCount": 5,
+                "encoding": "utf-8"
+            }
+        },
+        "root": {
+            "level": "INFO",
+            "handlers": ["console", "file"]
+        }
+    }
     
-    embedding_model_config = {
+    embedding_model_config: dict = {
         "model_name": "Qwen/Qwen3-Embedding-0.6B", # Change as needed.
         "batch_size": 32,
         "max_length": 4096
     }
     
-    dr_config = {
-        "model": 'umap',
+    dr_config: dict = { # Dimensionality Reduction config
+        "method": 'umap',
         "n_neighbors": 15,
         "n_components": 5,
         "min_dist": 0.0,
@@ -50,7 +83,7 @@ class Settings:
         "random_state": SEED
     }
     
-    clustering_config = {
+    clustering_config: dict = { 
         "model": 'hdbscan',
         "min_cluster_size": 10,
         "min_samples": 5,
@@ -59,12 +92,11 @@ class Settings:
         "random_state": SEED
     }
     
-    c_tfidf_config = {
+    c_tfidf_config: dict = { # Class-based TF-IDF config
         "top_n_words": 10,
         "ngram_range": (1, 2)
     }
     
-    random_state: int = 42
     verbose: bool = True
 
 

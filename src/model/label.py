@@ -3,6 +3,10 @@ from transformers import pipeline
 from src.config import config
 import logging
 
+from src.config import config
+from src.helper.utlis import get_device
+
+logging.config.dictConfig(config.LOG_CONFIG)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 

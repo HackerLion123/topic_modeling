@@ -42,23 +42,24 @@ logger = logging.getLogger(__name__)
 class TextEmbedder:
     """Text embedding for topic modeling using encoder models"""
     
-    def __init__(self) -> None:
-        self.model = SentenceTransformer("Qwen/Qwen3-Embedding-0.6B")
+    def __init__(self, **kwargs) -> None:
+        self.model_name = kwargs.get('model_name')
+        self.batch_size = kwargs.get('batch_size', 32) # Default batch size
+        self.max_length = kwargs.get('max_length', 512) # Default max token length
+        self.model = SentenceTransformer(self.model_name,local_files_only=True, backend='torch')
     
     def embed(
-        self
+        self, documents: List[str]
     ) -> np.ndarray:
         """
         Generate embeddings for a list of documents.
         
         Args:
             documents: List of documents to embed
-            batch_size: Batch size for embedding
-            max_length: Maximum token length for each document
         Returns:
             Numpy array of embeddings
         """
-        self.model
+        pass
     
 
 class DimensionalityReducer:

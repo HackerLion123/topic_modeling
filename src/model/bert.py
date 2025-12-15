@@ -209,13 +209,14 @@ class ClusteringModel:
         self,
         method: Literal['hdbscan', 'kmeans', 'dbscan', 'agglomerative'] = 'hdbscan',
         n_clusters: Optional[int] = None,
+        random_state: int = 42,
         **kwargs
     ):
         """
         Initialize clustering model.
         
         Args:
-            method: Clustering method ('hdbscan', 'kmeans', 'dbscan', 'agglomerative')
+            model: Clustering method ('hdbscan', 'kmeans', 'dbscan', 'agglomerative')
             n_clusters: Number of clusters (required for kmeans and agglomerative)
             random_state: Random state for reproducibility
             **kwargs: Additional parameters for specific methods
@@ -233,10 +234,10 @@ class ClusteringModel:
         if self.method == 'hdbscan':
             # HDBSCAN for automatic topic discovery
             default_params = {
-                'min_cluster_size': 10,
-                'min_samples': 5,
-                'metric': 'euclidean',
-                'cluster_selection_method': 'eom',
+                'min_cluster_size': self.kwargs.get('min_cluster_size', 10),
+                'min_samples': self.kwargs.get('min_samples', 5),
+                'metric': self.kwargs.get('metric', 'euclidean'),
+                'cluster_selection_method': self.kwargs.get('cluster_selection_method', 'eom'),
                 'prediction_data': True
             }
             default_params.update(self.kwargs)
@@ -289,7 +290,7 @@ class ClusteringModel:
             
         else:
             raise ValueError(
-                f"Unknown method: {self.method}. "
+                f"Unknown method: {self.model}. "
                 f"Choose from: 'hdbscan', 'kmeans', 'dbscan', 'agglomerative'"
             )
     
@@ -383,18 +384,16 @@ class BERTTopicModel:
             random_state: Random state for reproducibility
             verbose: Whether to print verbose output
         """
-        # Use provided configs or defaults from config
-        from src.config import config as default_config
         
-        self.embedding_config = embedding_model_config or default_config.embedding_model_config
-        self.dr_config = dr_config or default_config.dr_config
-        self.clustering_config = clustering_config or default_config.clustering_config
-        self.c_tfidf_config = c_tfidf_config or default_config.c_tfidf_config
+        self.embedding_config = embedding_model_config 
+        self.dr_config = dr_config
+        self.clustering_config = clustering_config
+        self.c_tfidf_config = c_tfidf_config
         self.random_state = random_state
         self.verbose = verbose
         
         # Extract configurations
-        dr_method = self.dr_config.get('model', 'umap')
+        dr_method = self.dr_config.get('method', 'umap')
         n_components = self.dr_config.get('n_components', 5)
         
         clustering_method = self.clustering_config.get('model', 'hdbscan')

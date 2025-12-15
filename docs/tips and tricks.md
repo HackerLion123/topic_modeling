@@ -6,6 +6,40 @@
 
 ## Dimensionality Reduction
 
+1. ### UMAP (Uniform Manifold Approximation and Projection)
+    - **RECOMMENDED for topic modeling**
+    - Best for: Preserving both local and global structure
+    - Pros: Better cluster separation, faster than t-SNE, preserves global structure
+    - Cons: Requires tuning of hyperparameters
+    - When to use: Default choice for topic modeling, works well with HDBSCAN
+       
+2. ### PCA (Principal Component Analysis)
+    - Best for: Linear dimensionality reduction, quick exploration
+    - Pros: Fast, deterministic, good for linear relationships
+    - Cons: May not capture complex non-linear patterns, can lose cluster structure
+    - When to use: Large datasets (>100k docs), when speed is critical, linear data
+    
+3. ### t-SNE (t-Distributed Stochastic Neighbor Embedding)
+    - Best for: Visualization, preserving local structure
+    - Pros: Excellent for visualization, preserves local neighborhoods
+    - Cons: Slow on large datasets, doesn't preserve global structure well
+    - When to use: Small-medium datasets (<10k docs), visualization purposes
+    
+4. ### TruncatedSVD (LSA - Latent Semantic Analysis)
+    - Best for: Text data, sparse matrices
+    - Pros: Fast, works with sparse matrices, interpretable
+    - Cons: Linear, may not capture complex patterns
+    - When to use: Very large datasets, sparse text data, baseline comparison
+
+### General Guidelines:
+-------------------
+- **Small dataset** (<1k docs): UMAP or t-SNE
+- **Medium dataset** (1k-50k docs): UMAP (recommended)
+- **Large dataset** (>50k docs): PCA or TruncatedSVD, then optionally UMAP
+- **For clustering**: UMAP > PCA > t-SNE
+- **For visualization only**: t-SNE or UMAP
+- **For speed**: PCA > TruncatedSVD > UMAP > t-SNE
+
 
 ## Clustering
 
@@ -47,5 +81,8 @@
 - **Need speed**: K-Means > DBSCAN > HDBSCAN > Agglomerative
 - **After UMAP**: HDBSCAN (best combination)
 - **After PCA**: K-Means or HDBSCAN
+
+
+
 
 ## Model Labeling

@@ -83,7 +83,7 @@ class Settings:
     }
     
     clustering_config: dict = { 
-        "model": 'hdbscan',
+        "method": 'hdbscan',
         "min_cluster_size": 10,
         "min_samples": 5,
         "metric": 'euclidean',

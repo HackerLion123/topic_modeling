@@ -68,15 +68,15 @@ class Settings:
     }
     
     embedding_model_config: dict = {
-        "model_name": "sentence-transformers/all-MiniLM-L6-v2", #"Qwen/Qwen3-Embedding-0.6B", # Change as needed.
-        "batch_size": 32, # Adjust based on your hardware capabilities.
+        "model_name": "BAAI/bge-large-en-v1.5", #"Qwen/Qwen3-Embedding-0.6B", # Change as needed.
+        "batch_size": 8, # Adjust based on your hardware capabilities.
         # "max_length": 512
     }
     
     dr_config: dict = { # Dimensionality Reduction config
         "method": 'umap',
-        "n_neighbors": 15,
-        "n_components": 5,
+        "n_neighbors": 20,
+        "n_components":5,
         "min_dist": 0.0,
         "metric": 'cosine',
         "random_state": SEED

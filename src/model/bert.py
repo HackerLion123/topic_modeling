@@ -14,6 +14,7 @@ import pandas as pd
 import torch
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Union, Literal
+from scipy import sparse
 from dataclasses import dataclass
 from collections import Counter
 
@@ -85,6 +86,43 @@ class TextEmbedder:
             encode_kwargs['chunk_size'] = self.max_length
             
         return self.model.encode(docs, **encode_kwargs)
+    
+    def save_embed(self, embeddings: np.ndarray, output_path: Union[str, Path]) -> None:
+        """
+        Save embeddings to disk.
+        
+        Args:
+            embeddings: Numpy array of embeddings to save
+            output_path: Path to save the embeddings file (.npy)
+        """
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Ensure .npy extension
+        if output_path.suffix != '.npy':
+            output_path = output_path.with_suffix('.npy')
+        
+        np.save(output_path, embeddings)
+        logger.info(f"Saved embeddings to {output_path} (shape: {embeddings.shape})")
+
+    def load_embed(self, embeddings_path: Union[str, Path]) -> np.ndarray:
+        """
+        Load saved embeddings from disk.
+        
+        Args:
+            embeddings_path: Path to the saved embeddings file
+            
+        Returns:
+            Numpy array of embeddings
+        """
+        embeddings_path = Path(embeddings_path)
+        if not embeddings_path.exists():
+            raise ValueError(f"Embeddings path {embeddings_path} does not exist")
+        
+        embeddings = np.load(embeddings_path)
+        logger.info(f"Loaded embeddings from {embeddings_path} (shape: {embeddings.shape})")
+        
+        return embeddings
     
 
 class DimensionalityReducer:
@@ -232,12 +270,12 @@ class ClusteringModel:
     def _initialize_model(self):
         """Initialize the appropriate clustering model."""
         if self.method == 'hdbscan':
-            # HDBSCAN for automatic topic discovery
+            
             default_params = {
-                'min_cluster_size': self.kwargs.get('min_cluster_size', 10),
-                'min_samples': self.kwargs.get('min_samples', 5),
-                'metric': self.kwargs.get('metric', 'euclidean'),
-                'cluster_selection_method': self.kwargs.get('cluster_selection_method', 'eom'),
+                'min_cluster_size': 10,
+                'min_samples':  5,
+                'metric':'euclidean',
+                'cluster_selection_method': 'eom',
                 'prediction_data': True
             }
             default_params.update(self.kwargs)
@@ -309,7 +347,6 @@ class ClusteringModel:
         
         labels = self.model.fit_predict(embeddings)
         
-        # Count unique topics
         unique_labels = set(labels)
         n_topics = len(unique_labels - {-1}) if -1 in unique_labels else len(unique_labels)
         n_outliers = sum(labels == -1)
@@ -326,21 +363,147 @@ class ClusteringModel:
 
 
 class CTFIDFVectorizer:
-    """Class-based TF-IDF for topic representation"""
+    """
+    Class-based TF-IDF for topic representation.
     
-    def __init__(self):
+    Unlike traditional TF-IDF (document-level), c-TF-IDF works at cluster/topic level:
+    - Treats all documents in a cluster as a single document
+    - Computes importance of words for each topic relative to all topics
+    - Formula: c-TF-IDF = tf * log(1 + A/df) where:
+        - tf: frequency of word in cluster
+        - A: average number of words per cluster  
+        - df: frequency of word across all clusters
+    """
+
+    def __init__(self, **kwargs):
         """
         Initialize c-TF-IDF vectorizer.
-        
         Args:
-            config: Topic modeling configuration
+        **kwargs: Configuration parameters including:
+            - ngram_range: tuple, default (1, 1)
+            - use_bm25: bool, default False
+            - bm25_k1: float, default 1.5
+            - bm25_b: float, default 0.75
         """
-        pass
-    
+        ngram_range = kwargs.get('ngram_range', (1, 1))
+        
+        # BM25 parameters
+        self.use_bm25 = kwargs.get('use_bm25', False)
+        self.bm25_k1 = kwargs.get('bm25_k1', 1.5)
+        self.bm25_b = kwargs.get('bm25_b', 0.75)
+        # Basic count vectorizer; tweak params as needed
+        self.vectorizer = CountVectorizer(stop_words='english', ngram_range=ngram_range)
+        self.vocabulary_: List[str] | None = None
+        self.c_tf_idf_: np.ndarray | None = None
+
     def fit_transform(
         self,
-        documents: List[str]) -> Tuple[np.ndarray, List[str]]:
-        pass
+        documents: List[str]
+    ) -> Tuple[np.ndarray, List[str]]:
+        """
+        Fit the c-TF-IDF representation on the given cluster documents and return
+        the c-TF-IDF matrix and feature names.
+
+        Args:
+            documents: List of strings where each string is the concatenation
+                       of all documents in a cluster (one per topic/cluster).
+
+        Returns:
+            c_tf_idf: 2D numpy array, shape (n_clusters, n_features)
+            feature_names: list of feature/word strings
+        """
+        # Apply Count Vectorizer
+        X = self.vectorizer.fit_transform(documents)  
+        print(X.shape)
+        feature_names = self.vectorizer.get_feature_names_out().tolist()
+
+        word_counts_per_cluster = np.asarray(X.sum(axis=1)).ravel()
+        
+        # Avoid division by zero
+        word_counts_per_cluster[word_counts_per_cluster == 0] = 1.0
+
+        # Average number of words per cluster (A)
+        A = float(word_counts_per_cluster.mean())
+
+        # Term frequency per cluster: tf = count / total_words_in_cluster
+        #    Use sparse operations to keep it efficient, then densify at the end.
+        tf = X.multiply(1.0 / word_counts_per_cluster[:, None])
+
+        # Document frequency across clusters: df = in how many clusters term appears
+        #    (i.e., number of clusters where count > 0)
+        df = np.asarray((X > 0).sum(axis=0)).ravel().astype(float)
+        df[df == 0] = 1.0  # avoid division by zero
+
+        # c-TF-IDF weighting: tf * log(1 + A/df)
+        idf = np.log(1.0 + (A / df)) 
+
+        # Multiply each column by its idf
+        c_tf_idf_sparse = tf.multiply(idf)
+
+        # Store dense matrix
+        c_tf_idf = c_tf_idf_sparse.toarray()
+
+        self.vocabulary_ = feature_names
+        self.c_tf_idf_ = c_tf_idf
+
+        return c_tf_idf, feature_names
+
+    def _bm25_weighting(
+        self,
+        X: np.ndarray,
+        k1: float = 1.5,
+        b: float = 0.75
+    ) -> np.ndarray:
+        """
+        Apply BM25 weighting to the c-TF-IDF matrix.
+
+        This treats each row as a "document" (cluster/topic) and each column as a term.
+
+        Args:
+            X: c-TF-IDF matrix (or any doc-term weight matrix), shape (n_docs, n_terms)
+            
+            k1: BM25 k1 parameter. Term Frequency saturation parameter. 
+            Lower values lead to quick staturation. 
+            High values leads to linear growth. (More important to frequent words)
+            
+            b: BM25 b parameter. Document length normalization parameter. Helps to normalize for document length.
+            
+        Returns:
+            BM25 weighted matrix (same shape as X)
+        """
+        if sparse.issparse(X):
+            X = X.toarray()
+
+        X = X.astype(float, copy=False)
+        n_docs, n_terms = X.shape
+
+        if n_docs == 0 or n_terms == 0:
+            return np.zeros_like(X)
+
+        # Document lengths (here: sum of weights per row)
+        dl = X.sum(axis=1)
+        avgdl = dl.mean()
+        if avgdl == 0:
+            return np.zeros_like(X)
+
+        # Document frequency for each term: number of docs where term is non-zero
+        df = np.count_nonzero(X, axis=0).astype(float)
+        df[df == 0] = 1.0
+
+        # BM25 IDF
+        idf = np.log((n_docs - df + 0.5) / (df + 0.5) + 1.0)
+
+        # BM25 term weighting
+        numerator = X * (k1 + 1.0)
+        denominator = X + k1 * (1.0 - b + b * (dl[:, None] / avgdl))
+        # Avoid division by zero
+        denominator[denominator == 0] = 1e-12
+
+        bm25 = idf * (numerator / denominator)
+        return bm25
+
+
+
         
 class BERTTopicModel:
     """
@@ -385,10 +548,10 @@ class BERTTopicModel:
             verbose: Whether to print verbose output
         """
         
-        self.embedding_config = embedding_model_config 
-        self.dr_config = dr_config
-        self.clustering_config = clustering_config
-        self.c_tfidf_config = c_tfidf_config
+        self.embedding_config = embedding_model_config or {}
+        self.dr_config = dr_config or {}
+        self.clustering_config = clustering_config or {}
+        self.c_tfidf_config = c_tfidf_config or {}
         self.random_state = random_state
         self.verbose = verbose
         
@@ -396,14 +559,15 @@ class BERTTopicModel:
         dr_method = self.dr_config.get('method', 'umap')
         n_components = self.dr_config.get('n_components', 5)
         
-        clustering_method = self.clustering_config.get('model', 'hdbscan')
+        clustering_method = self.clustering_config.get('method', 'hdbscan')
         n_clusters = self.clustering_config.get('n_clusters', None)
         
         # Initialize components
-        self.embedder = TextEmbedder()
+        self.embedder = TextEmbedder(**self.embedding_config)
         
-        # Prepare DR params (exclude 'model' key)
-        dr_params = {k: v for k, v in self.dr_config.items() if k not in ['model', 'n_components']}
+        # Prepare DR params (exclude 'method' and 'n_components' keys)
+        dr_params = {k: v for k, v in self.dr_config.items() 
+                    if k not in ['method', 'n_components']}
         self.dim_reducer = DimensionalityReducer(
             method=dr_method,
             n_components=n_components,
@@ -411,9 +575,9 @@ class BERTTopicModel:
             **dr_params
         )
         
-        # Prepare clustering params (exclude 'model' and 'n_clusters' keys)
+        # Prepare clustering params (exclude 'method' and 'n_clusters' keys)
         clustering_params = {k: v for k, v in self.clustering_config.items() 
-                           if k not in ['model', 'n_clusters']}
+                           if k not in ['method', 'n_clusters']}
         self.clusterer = ClusteringModel(
             method=clustering_method,
             n_clusters=n_clusters,
@@ -424,12 +588,12 @@ class BERTTopicModel:
         self.ctfidf = CTFIDFVectorizer()
         
         # Fitted data
-        self.embeddings_ = None
-        self.reduced_embeddings_ = None
-        self.labels_ = None
-        self.topics_ = None
-        self.topic_words_ = None
-        self.documents_ = None
+        self.embeddings_: Optional[np.ndarray] = None
+        self.reduced_embeddings_: Optional[np.ndarray] = None
+        self.labels_: Optional[np.ndarray] = None
+        self.topics_: Optional[Dict[int, List[str]]] = None
+        self.topic_words_: Optional[Dict[int, List[Tuple[str, float]]]] = None
+        self.documents_: Optional[List[str]] = None
         
         if self.verbose:
             logger.info(f"Initialized BERTTopicModel:")
@@ -442,22 +606,101 @@ class BERTTopicModel:
     def fit(
         self, 
         documents: List[str],
-        batch_size: Optional[int] = None,
-        max_length: Optional[int] = None
+        embeddings: Optional[np.ndarray] = None
     ) -> 'BERTTopicModel':
         """
         Fit the topic model on documents.
         
         Args:
             documents: List of documents to model
-            batch_size: Batch size for embedding (defaults to config)
-            max_length: Max token length (defaults to config)
+            embeddings: Pre-computed embeddings (optional, if None will compute)
             
         Returns:
             Self for chaining
         """
         logger.info(f"Starting topic modeling on {len(documents)} documents")
         logger.info("=" * 80)
+        
+        self.documents_ = documents
+
+        if embeddings is None:
+            logger.info("\nStep 1: Generating embeddings")
+            self.embeddings_ = self.embedder.embed(documents)
+        else:
+            logger.info("\nStep 1: Using pre-computed embeddings")
+            self.embeddings_ = embeddings
+        
+        logger.info("\nStep 2: Reducing dimensionality")
+        self.reduced_embeddings_ = self.dim_reducer.fit_transform(self.embeddings_)
+        
+        logger.info("\nStep 3: Clustering documents")
+        self.labels_ = self.clusterer.fit_predict(self.reduced_embeddings_)
+        
+        
+        logger.info("\nStep 4: Generating topic representations with c-TF-IDF")
+        self._extract_topics()
+        
+        logger.info("\n" + "="*80)
+        logger.info("✓ Topic modeling pipeline complete!")
+        logger.info(f"✓ Found {len(self.topic_words_)} topics")
+        
+        return self
+
+    def _extract_topics(self):
+        """Extract topic representations using c-TF-IDF."""
+        if self.labels_ is None or self.documents_ is None:
+            return
+        
+        # Group documents by topic (excluding outliers)
+        docs_per_topic = {}
+        for doc, label in zip(self.documents_, self.labels_):
+            if label == -1:  # Skip outliers
+                continue
+            if label not in docs_per_topic:
+                docs_per_topic[label] = []
+            docs_per_topic[label].append(doc)
+        
+        # Concatenate documents per topic
+        topic_docs = []
+        topic_ids = []
+        for topic_id in sorted(docs_per_topic.keys()):
+            topic_docs.append(' '.join(docs_per_topic[topic_id]))
+            topic_ids.append(topic_id)
+        
+        if len(topic_docs) == 0:
+            logger.warning("No topics found (all documents are outliers)")
+            self.topic_words_ = {}
+            self.topics_ = {}
+            return
+        
+        # Fit c-TF-IDF
+        c_tfidf_matrix, vocab = self.ctfidf.fit_transform(topic_docs)
+        
+        # Extract top words for each topic
+        top_n_words = self.c_tfidf_config.get("top_n_words", 10)
+        self.topic_words_ = {}
+        
+        for i, topic_id in enumerate(topic_ids):
+            # Get scores for this topic
+            topic_scores = c_tfidf_matrix[i]
+            
+            # Get indices of top N words (sorted descending)
+            top_indices = topic_scores.argsort()[-top_n_words:][::-1]
+            
+            # Get words and their scores
+            words = [vocab[j] for j in top_indices]
+            scores = [topic_scores[j] for j in top_indices]
+            
+            self.topic_words_[topic_id] = list(zip(words, scores))
+
+        # Create a simple topics_ dictionary (just words, no scores)
+        self.topics_ = {
+            topic: [word for word, score in words]
+            for topic, words in self.topic_words_.items()
+        }
+        
+        logger.info(f"Extracted keywords for {len(self.topic_words_)} topics")
+
         
     
     def topic_over_time(

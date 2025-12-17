@@ -84,16 +84,18 @@ class Settings:
     
     clustering_config: dict = { 
         "method": 'hdbscan',
-        "min_cluster_size": 10,
-        "min_samples": 5,
+        "min_cluster_size": 3,
+        "min_samples": 2,
         "metric": 'euclidean',
         "cluster_selection_method": 'eom',
         "random_state": SEED
     }
     
-    c_tfidf_config: dict = { # Class-based TF-IDF config
-        "top_n_words": 10,
-        "ngram_range": (1, 2)
+    c_tfidf_config: dict = { 
+        "ngram_range": (1, 2),
+        # "use_bm25": True,  
+        # "bm25_k1": 1.5,     
+        # "bm25_b": 0.75 
     }
     
     verbose: bool = True

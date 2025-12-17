@@ -3,6 +3,8 @@ from transformers import pipeline
 from src.config import config
 import logging
 
+from bertopic.representation import KeyBERTInspired
+
 from src.config import config
 from src.helper.utlis import get_device
 

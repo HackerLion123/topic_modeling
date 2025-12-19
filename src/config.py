@@ -29,16 +29,12 @@ class Settings:
     
     SEED: int= 23
     
-    # Specific use case detail prompt for Topic naming
-    system_prompt: str = (      
-        
-    )
     
     LLM_CONFIG: dict = { # LLM to label topics
         "model_name": "Qwen/Qwen3-4B",  # "Qwen/Qwen3-8B",  # Change as needed
         "max_new_tokens": 80,
         "temperature": 0.1,
-        "use_case": "customer_complaints"
+        "use_case": "customer_reviews"
     }
     LOG_CONFIG: dict = {
         "version": 1,
@@ -92,7 +88,7 @@ class Settings:
     
     clustering_config: dict = { 
         "method": 'hdbscan',
-        "min_cluster_size": 5,
+        "min_cluster_size": 4,
         "min_samples": 3,
         "metric": 'euclidean',
         "cluster_selection_method": 'eom',
@@ -101,9 +97,9 @@ class Settings:
     
     c_tfidf_config: dict = { 
         "ngram_range": (1, 2),
-        # "use_bm25": True,  
-        # "bm25_k1": 1.5,     
-        # "bm25_b": 0.75 
+        "use_bm25": True,  
+        "bm25_k1": 1.5,     
+        "bm25_b": 0.75 
     }
     
     verbose: bool = True

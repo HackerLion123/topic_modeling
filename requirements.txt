@@ -6,3 +6,4 @@ streamlit
 bertopic
 sentence-transformers
 dotenv
+nbformat

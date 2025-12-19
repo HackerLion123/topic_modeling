@@ -29,8 +29,16 @@ class Settings:
     
     SEED: int= 23
     
+    # Specific use case detail prompt for Topic naming
+    system_prompt: str = (      
+        
+    )
+    
     LLM_CONFIG: dict = { # LLM to label topics
-        "model_name": "Qwen/Qwen3-4B",  # Change as needed
+        "model_name": "Qwen/Qwen3-8B",  # "Qwen/Qwen3-8B",  # Change as needed
+        "max_new_tokens": 80,
+        "temperature": 0.1,
+        "use_case": "customer_complaints"
     }
     LOG_CONFIG: dict = {
         "version": 1,

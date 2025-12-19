@@ -1,11 +1,13 @@
 import logging
+import logging.config
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Union
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from typing import List, Dict, Optional, Tuple
-from pathlib import Path
 
 from src.config import config
 
@@ -14,537 +16,317 @@ logger = logging.getLogger(__name__)
 
 
 class TopicVisualizer:
-    """Clean visualizations for topic modeling results."""
-    
-    def __init__(self, model=None):
-        """
-        Initialize visualizer.
-        
-        Args:
-            model: Fitted BERTTopicModel instance (optional)
-        """
-        self.model = model
-        
+    """
+    Simple, input-driven visualizations for topic modeling (Plotly).
+
+    This class does NOT store a model. Pass inputs directly to methods.
+    """
+
+    def __init__(self, template: str = "plotly_white") -> None:
+        self.template = template
+
+    @staticmethod
+    def _snippet(text: str, max_chars: int = 120) -> str:
+        s = "" if text is None else str(text)
+        s = " ".join(s.split())
+        return s if len(s) <= max_chars else s[:max_chars] + "..."
+
     def plot_embeddings_2d(
         self,
         embeddings: np.ndarray,
         labels: Optional[np.ndarray] = None,
         hover_text: Optional[List[str]] = None,
-        title: str = "Document Embeddings (2D)",
-        method: str = "auto"
+        title: str = "Embeddings (2D)",
+        max_points: int = 12000,
+        random_state: int = 23,
     ) -> go.Figure:
         """
-        Plot 2D embeddings with cluster colors.
-        
-        Args:
-            embeddings: 2D embeddings (n_docs, 2)
-            labels: Cluster labels (n_docs,)
-            hover_text: Hover text for points (document snippets)
-            title: Plot title
-            method: Reduction method for title
-            
-        Returns:
-            Plotly figure
+        2D scatter of embeddings with optional topic coloring.
+        - If embeddings has >2 dims, uses first 2.
+        - If many topics, uses continuous color to avoid huge legends.
         """
-        if embeddings.shape[1] > 2:
-            logger.warning(f"Embeddings have {embeddings.shape[1]} dimensions, using first 2")
-            embeddings = embeddings[:, :2]
-        
-        df = pd.DataFrame({
-            'x': embeddings[:, 0],
-            'y': embeddings[:, 1]
-        })
-        
+        emb = np.asarray(embeddings)
+        if emb.ndim != 2:
+            raise ValueError(f"embeddings must be 2D, got shape={emb.shape}")
+        if emb.shape[1] < 2:
+            raise ValueError(f"Need at least 2 dims, got {emb.shape[1]}")
+
+        n = emb.shape[0]
         if labels is not None:
-            df['Topic'] = [f"Topic {l}" if l >= 0 else "Outlier" for l in labels]
+            lab = np.asarray(labels)
+            if lab.shape != (n,):
+                raise ValueError(f"labels must be shape ({n},), got {lab.shape}")
         else:
-            df['Topic'] = 'Document'
-        
+            lab = None
+
+        if hover_text is not None and len(hover_text) != n:
+            raise ValueError(f"hover_text must have length {n}, got {len(hover_text)}")
+
+        # Downsample for speed if needed
+        if max_points is not None and n > max_points:
+            rng = np.random.default_rng(random_state)
+            idx = np.sort(rng.choice(n, size=max_points, replace=False))
+            emb = emb[idx]
+            if lab is not None:
+                lab = lab[idx]
+            if hover_text is not None:
+                hover_text = [hover_text[i] for i in idx.tolist()]
+
+        emb2 = emb[:, :2]
+        df = pd.DataFrame({"x": emb2[:, 0], "y": emb2[:, 1]})
+
         if hover_text is not None:
-            df['Text'] = [t[:100] + "..." if len(t) > 100 else t for t in hover_text]
-        
+            df["text"] = [self._snippet(t) for t in hover_text]
+
+        # No labels: plain scatter
+        if lab is None:
+            fig = px.scatter(
+                df,
+                x="x",
+                y="y",
+                title=title,
+                template=self.template,
+                hover_data=["text"] if "text" in df.columns else None,
+            )
+            fig.update_traces(marker=dict(size=5, opacity=0.75))
+            fig.update_layout(width=950, height=620, showlegend=False)
+            return fig
+
+        unique_topics = sorted(set(lab.tolist()))
+        n_topics = len([t for t in unique_topics if t != -1])
+
+        # Many topics: continuous color for inliers + separate outlier trace
+        if n_topics > 25:
+            inlier_mask = lab >= 0
+            df_in = df[inlier_mask].copy()
+            df_out = df[~inlier_mask].copy()
+            df_in["topic_id"] = lab[inlier_mask].astype(int)
+
+            fig = px.scatter(
+                df_in,
+                x="x",
+                y="y",
+                color="topic_id",
+                color_continuous_scale="Turbo",
+                title=title,
+                template=self.template,
+                hover_data=["text"] if "text" in df_in.columns else None,
+            )
+            fig.update_traces(marker=dict(size=5, opacity=0.7))
+
+            if len(df_out) > 0:
+                fig.add_trace(
+                    go.Scattergl(
+                        x=df_out["x"],
+                        y=df_out["y"],
+                        mode="markers",
+                        name="Outliers",
+                        marker=dict(size=5, color="rgba(120,120,120,0.55)"),
+                        text=df_out["text"] if "text" in df_out.columns else None,
+                        hovertemplate="%{text}<extra>Outlier</extra>"
+                        if "text" in df_out.columns
+                        else "<extra>Outlier</extra>",
+                    )
+                )
+
+            fig.update_layout(width=950, height=620, showlegend=True)
+            return fig
+
+        # Few topics: categorical legend
+        df["topic"] = ["Outlier" if t == -1 else f"Topic {int(t)}" for t in lab.tolist()]
         fig = px.scatter(
             df,
-            x='x',
-            y='y',
-            color='Topic',
-            hover_data=['Text'] if hover_text else None,
-            title=f"{title} ({method.upper()})",
-            template='plotly_white',
-            color_discrete_sequence=px.colors.qualitative.Set3
-        )
-        
-        fig.update_traces(marker=dict(size=6, opacity=0.7, line=dict(width=0.5, color='white')))
-        fig.update_layout(
-            width=900,
-            height=600,
-            showlegend=True,
-            legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99)
-        )
-        
-        return fig
-    
-    def plot_embeddings_3d(
-        self,
-        embeddings: np.ndarray,
-        labels: Optional[np.ndarray] = None,
-        hover_text: Optional[List[str]] = None,
-        title: str = "Document Embeddings (3D)"
-    ) -> go.Figure:
-        """
-        Plot 3D embeddings with cluster colors.
-        
-        Args:
-            embeddings: 3D embeddings (n_docs, 3)
-            labels: Cluster labels
-            hover_text: Hover text for points
-            title: Plot title
-            
-        Returns:
-            Plotly figure
-        """
-        if embeddings.shape[1] < 3:
-            raise ValueError("Need at least 3 dimensions for 3D plot")
-        
-        if embeddings.shape[1] > 3:
-            logger.warning(f"Embeddings have {embeddings.shape[1]} dimensions, using first 3")
-            embeddings = embeddings[:, :3]
-        
-        df = pd.DataFrame({
-            'x': embeddings[:, 0],
-            'y': embeddings[:, 1],
-            'z': embeddings[:, 2]
-        })
-        
-        if labels is not None:
-            df['Topic'] = [f"Topic {l}" if l >= 0 else "Outlier" for l in labels]
-        else:
-            df['Topic'] = 'Document'
-        
-        if hover_text is not None:
-            df['Text'] = [t[:100] + "..." if len(t) > 100 else t for t in hover_text]
-        
-        fig = px.scatter_3d(
-            df,
-            x='x',
-            y='y',
-            z='z',
-            color='Topic',
-            hover_data=['Text'] if hover_text else None,
+            x="x",
+            y="y",
+            color="topic",
             title=title,
-            template='plotly_white',
-            color_discrete_sequence=px.colors.qualitative.Set3
+            template=self.template,
+            color_discrete_sequence=px.colors.qualitative.Set3,
+            hover_data=["text"] if "text" in df.columns else None,
         )
-        
-        fig.update_traces(marker=dict(size=4, opacity=0.7))
-        fig.update_layout(width=900, height=700)
-        
+        fig.update_traces(marker=dict(size=5, opacity=0.75))
+        fig.update_layout(width=950, height=620)
         return fig
-    
+
     def plot_topic_distribution(
         self,
         labels: np.ndarray,
-        top_n: int = 20,
-        title: str = "Topic Distribution"
+        top_n: int = 25,
+        title: str = "Topic Distribution",
     ) -> go.Figure:
-        """
-        Plot topic size distribution as bar chart.
-        
-        Args:
-            labels: Cluster labels
-            top_n: Show top N topics
-            title: Plot title
-            
-        Returns:
-            Plotly figure
-        """
-        topic_counts = pd.Series(labels).value_counts()
-        
-        # Separate outliers
-        if -1 in topic_counts.index:
-            outlier_count = topic_counts[-1]
-            topic_counts = topic_counts.drop(-1)
-        else:
-            outlier_count = 0
-        
-        # Get top N
-        topic_counts = topic_counts.head(top_n)
-        
-        df = pd.DataFrame({
-            'Topic': [f"Topic {i}" for i in topic_counts.index],
-            'Count': topic_counts.values
-        })
-        
+        """Bar chart of largest topics (excludes outliers from ranking, but annotates them)."""
+        lab = np.asarray(labels)
+        counts = pd.Series(lab).value_counts()
+
+        outliers = int(counts.get(-1, 0)) if -1 in counts.index else 0
+        if -1 in counts.index:
+            counts = counts.drop(-1)
+
+        counts = counts.head(top_n)
+        df = pd.DataFrame({"topic_id": counts.index.astype(int), "count": counts.values.astype(int)})
+        df["topic"] = df["topic_id"].map(lambda t: f"Topic {t}")
+
         fig = px.bar(
             df,
-            x='Topic',
-            y='Count',
-            title=f"{title} (Top {top_n})",
-            template='plotly_white',
-            color='Count',
-            color_continuous_scale='Blues'
+            x="topic",
+            y="count",
+            title=f"{title} (Top {len(df)})",
+            template=self.template,
+            color="count",
+            color_continuous_scale="Blues",
         )
-        
-        fig.update_layout(
-            width=900,
-            height=500,
-            showlegend=False,
-            xaxis_tickangle=-45
-        )
-        
-        # Add outlier annotation if present
-        if outlier_count > 0:
+        fig.update_layout(width=950, height=520, showlegend=False, xaxis_tickangle=-45)
+
+        if outliers > 0:
             fig.add_annotation(
-                text=f"Outliers: {outlier_count:,} documents",
-                xref="paper", yref="paper",
-                x=0.98, y=0.98,
+                text=f"Outliers: {outliers:,}",
+                xref="paper",
+                yref="paper",
+                x=0.99,
+                y=0.99,
                 showarrow=False,
-                bgcolor="rgba(255,255,0,0.2)",
-                bordercolor="orange",
-                borderwidth=1
+                align="right",
+                bgcolor="rgba(230,230,230,0.7)",
+                bordercolor="rgba(120,120,120,0.6)",
+                borderwidth=1,
             )
-        
+
         return fig
-    
+
     def plot_topic_words(
         self,
         topic_words: Dict[int, List[Tuple[str, float]]],
         topic_id: int,
-        n_words: int = 10,
-        title: Optional[str] = None
+        n_words: int = 12,
+        title: Optional[str] = None,
     ) -> go.Figure:
-        """
-        Plot top words for a specific topic.
-        
-        Args:
-            topic_words: Dict mapping topic_id to list of (word, score)
-            topic_id: Topic to visualize
-            n_words: Number of words to show
-            title: Plot title
-            
-        Returns:
-            Plotly figure
-        """
+        """Horizontal bar chart for top words in one topic."""
         if topic_id not in topic_words:
-            raise ValueError(f"Topic {topic_id} not found")
-        
-        words_scores = topic_words[topic_id][:n_words]
-        words, scores = zip(*words_scores)
-        
-        df = pd.DataFrame({
-            'Word': words,
-            'Score': scores
-        })
-        
-        if title is None:
-            title = f"Topic {topic_id}: Top {n_words} Words"
-        
+            raise ValueError(f"topic_id={topic_id} not found")
+
+        pairs = topic_words[topic_id][:n_words]
+        if not pairs:
+            raise ValueError(f"topic_id={topic_id} has no words")
+
+        words, scores = zip(*pairs)
+        df = pd.DataFrame({"word": list(words), "score": list(scores)}).sort_values("score", ascending=True)
+
         fig = px.bar(
             df,
-            x='Score',
-            y='Word',
-            orientation='h',
-            title=title,
-            template='plotly_white',
-            color='Score',
-            color_continuous_scale='Viridis'
+            x="score",
+            y="word",
+            orientation="h",
+            title=title or f"Topic {topic_id}: Top {len(df)} Words",
+            template=self.template,
+            color="score",
+            color_continuous_scale="Viridis",
         )
-        
-        fig.update_layout(
-            width=700,
-            height=400,
-            showlegend=False,
-            yaxis={'categoryorder': 'total ascending'}
-        )
-        
+        fig.update_layout(width=780, height=420, showlegend=False)
         return fig
-    
-    def plot_all_topics_words(
+
+    def plot_topics_words_grid(
         self,
         topic_words: Dict[int, List[Tuple[str, float]]],
         n_topics: int = 9,
-        n_words: int = 5
+        n_words: int = 7,
+        n_cols: int = 3,
+        title: str = "Topic Words Overview",
     ) -> go.Figure:
-        """
-        Plot word clouds for multiple topics in a grid.
-        
-        Args:
-            topic_words: Dict mapping topic_id to list of (word, score)
-            n_topics: Number of topics to show
-            n_words: Number of words per topic
-            
-        Returns:
-            Plotly figure
-        """
-        # Get top topics by ID (excluding -1)
-        topic_ids = [tid for tid in sorted(topic_words.keys()) if tid >= 0][:n_topics]
-        
-        # Calculate grid dimensions
-        n_cols = 3
+        """Grid of small horizontal bar charts for multiple topics."""
+        if not topic_words:
+            raise ValueError("topic_words is empty")
+
+        topic_ids = [tid for tid in sorted(topic_words.keys()) if tid != -1][:n_topics]
+        if not topic_ids:
+            raise ValueError("No valid topic IDs to plot")
+
         n_rows = (len(topic_ids) + n_cols - 1) // n_cols
-        
         fig = make_subplots(
             rows=n_rows,
             cols=n_cols,
             subplot_titles=[f"Topic {tid}" for tid in topic_ids],
             vertical_spacing=0.12,
-            horizontal_spacing=0.1
+            horizontal_spacing=0.09,
         )
-        
-        for idx, topic_id in enumerate(topic_ids):
-            row = idx // n_cols + 1
-            col = idx % n_cols + 1
-            
-            words_scores = topic_words[topic_id][:n_words]
-            words, scores = zip(*words_scores)
-            
+
+        for i, tid in enumerate(topic_ids):
+            r = i // n_cols + 1
+            c = i % n_cols + 1
+
+            pairs = topic_words[tid][:n_words]
+            if not pairs:
+                continue
+
+            words, scores = zip(*pairs)
+            words = list(words)[::-1]   # highest at top
+            scores = list(scores)[::-1]
+
             fig.add_trace(
                 go.Bar(
                     x=list(scores),
                     y=list(words),
-                    orientation='h',
-                    marker=dict(
-                        color=scores,
-                        colorscale='Viridis',
-                        showscale=False
-                    ),
-                    showlegend=False
+                    orientation="h",
+                    marker=dict(color=list(scores), colorscale="Viridis", showscale=False),
+                    showlegend=False,
                 ),
-                row=row,
-                col=col
+                row=r,
+                col=c,
             )
-            
-            fig.update_xaxes(title_text="Score", row=row, col=col)
-        
+            fig.update_xaxes(title_text="Score", row=r, col=c)
+
         fig.update_layout(
-            title_text="Topic Words Overview",
-            height=300 * n_rows,
-            width=1200,
-            template='plotly_white'
+            title_text=title,
+            height=260 * n_rows + 120,
+            width=1100,
+            template=self.template,
         )
-        
         return fig
-    
-    def plot_cluster_sizes(
-        self,
-        labels: np.ndarray,
-        title: str = "Cluster Size Distribution"
-    ) -> go.Figure:
-        """
-        Plot cluster size distribution as pie chart.
-        
-        Args:
-            labels: Cluster labels
-            title: Plot title
-            
-        Returns:
-            Plotly figure
-        """
-        topic_counts = pd.Series(labels).value_counts()
-        
-        # Separate outliers
-        has_outliers = -1 in topic_counts.index
-        if has_outliers:
-            outlier_count = topic_counts[-1]
-            topic_counts = topic_counts.drop(-1)
-        
-        topic_labels = [f"Topic {i}" for i in topic_counts.index]
-        
-        if has_outliers:
-            topic_labels.append("Outliers")
-            counts = list(topic_counts.values) + [outlier_count]
+
+    def save_figure(self, fig: go.Figure, filepath: Union[str, Path], fmt: str = "html") -> None:
+        path = Path(filepath)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fmt = fmt.lower().lstrip(".")
+
+        if fmt == "html":
+            fig.write_html(str(path))
         else:
-            counts = list(topic_counts.values)
-        
-        fig = go.Figure(data=[go.Pie(
-            labels=topic_labels,
-            values=counts,
-            hole=0.3,
-            marker=dict(colors=px.colors.qualitative.Set3)
-        )])
-        
-        fig.update_layout(
-            title=title,
-            width=700,
-            height=500,
-            template='plotly_white'
-        )
-        
-        return fig
-    
-    def plot_document_length_by_topic(
-        self,
-        documents: List[str],
-        labels: np.ndarray,
-        top_n_topics: int = 10
-    ) -> go.Figure:
-        """
-        Plot document length distribution by topic.
-        
-        Args:
-            documents: List of documents
-            labels: Cluster labels
-            top_n_topics: Number of top topics to show
-            
-        Returns:
-            Plotly figure
-        """
-        doc_lengths = [len(doc.split()) for doc in documents]
-        
-        df = pd.DataFrame({
-            'Topic': [f"Topic {l}" if l >= 0 else "Outlier" for l in labels],
-            'Length': doc_lengths
-        })
-        
-        # Get top N topics by count
-        topic_counts = df['Topic'].value_counts().head(top_n_topics)
-        df = df[df['Topic'].isin(topic_counts.index)]
-        
-        fig = px.box(
-            df,
-            x='Topic',
-            y='Length',
-            title=f"Document Length by Topic (Top {top_n_topics})",
-            template='plotly_white',
-            color='Topic',
-            color_discrete_sequence=px.colors.qualitative.Set3
-        )
-        
-        fig.update_layout(
-            width=1000,
-            height=500,
-            showlegend=False,
-            xaxis_tickangle=-45
-        )
-        
-        return fig
-    
-    def save_figure(self, fig: go.Figure, filepath: Path, format: str = 'html'):
-        """
-        Save figure to file.
-        
-        Args:
-            fig: Plotly figure
-            filepath: Output file path
-            format: Format ('html', 'png', 'jpg', 'svg', 'pdf')
-        """
-        filepath = Path(filepath)
-        filepath.parent.mkdir(parents=True, exist_ok=True)
-        
-        if format == 'html':
-            fig.write_html(str(filepath))
-        else:
-            fig.write_image(str(filepath))
-        
-        logger.info(f"Saved visualization to {filepath}")
+            # For png/pdf/svg export you need kaleido installed.
+            fig.write_image(str(path))
+
+        logger.info(f"Saved visualization to {path}")
 
 
-def visualize_pipeline_results(
-    model,
-    output_dir: Optional[Path] = None,
-    save_format: str = 'html'
-) -> Dict[str, go.Figure]:
+def visualize_pipeline_results(embeddings, labels, topics: Optional = None, output_dir: Optional[Path] = None, save_format: str = "html") -> Dict[str, go.Figure]:
     """
-    Generate all visualizations for a fitted model.
-    
+    Convenience helper for a fitted model (still input-driven; no model stored in TopicVisualizer).
     Args:
-        model: Fitted BERTTopicModel
-        output_dir: Directory to save visualizations
-        save_format: Format to save ('html', 'png')
-        
+        embeddings: np.ndarray of shape (n_samples, n_dims)
+        labels: np.ndarray of shape (n_samples,)
+        topics: Optional dict of topic_id to list of (word, score) tuples
+        output_dir: Optional Path to save visualizations
+        save_format: "html", "png", "pdf", or "svg"
     Returns:
-        Dictionary of figure names to figures
+        Dict of plotly Figures keyed by name.
     """
-    if model.labels_ is None:
-        raise ValueError("Model must be fitted before visualization")
-    
-    logger.info("Generating visualizations...")
-    
-    visualizer = TopicVisualizer(model)
-    figures = {}
-    
-    # 1. 2D Embeddings
-    if model.reduced_embeddings_.shape[1] >= 2:
-        dr_method = model.dr_config.get('method', 'unknown')
-        figures['embeddings_2d'] = visualizer.plot_embeddings_2d(
-            model.reduced_embeddings_,
-            model.labels_,
-            model.documents_,
-            method=dr_method
-        )
-    
-    # 2. 3D Embeddings (if available)
-    if model.reduced_embeddings_.shape[1] >= 3:
-        figures['embeddings_3d'] = visualizer.plot_embeddings_3d(
-            model.reduced_embeddings_,
-            model.labels_,
-            model.documents_
-        )
-    
-    # 3. Topic Distribution
-    figures['topic_distribution'] = visualizer.plot_topic_distribution(model.labels_)
-    
-    # 4. Cluster Sizes
-    figures['cluster_sizes'] = visualizer.plot_cluster_sizes(model.labels_)
-    
-    # 5. All Topics Words
-    if model.topic_words_:
-        figures['topic_words_grid'] = visualizer.plot_all_topics_words(
-            model.topic_words_,
-            n_topics=9,
-            n_words=5
-        )
-    
-    # 6. Document Length by Topic
-    figures['doc_length_by_topic'] = visualizer.plot_document_length_by_topic(
-        model.documents_,
-        model.labels_
+
+    vis = TopicVisualizer()
+    figs: Dict[str, go.Figure] = {}
+
+
+    figs["embeddings_2d"] = vis.plot_embeddings_2d(
+        embeddings=embeddings,
+        labels=labels,
+        hover_text=topics,
+        title="Embeddings (2D)",
     )
-    
-    # Save if output directory provided
+
+    figs["topic_distribution"] = vis.plot_topic_distribution(labels=labels, title="Topic Distribution")
+    figs["topic_words_grid"] = vis.plot_topics_words_grid(topics)
+
     if output_dir:
-        output_dir = Path(output_dir)
-        vis_dir = output_dir / "visualizations"
-        vis_dir.mkdir(parents=True, exist_ok=True)
-        
-        for name, fig in figures.items():
-            filepath = vis_dir / f"{name}.{save_format}"
-            visualizer.save_figure(fig, filepath, format=save_format)
-        
-        logger.info(f"Saved {len(figures)} visualizations to {vis_dir}")
-    
-    return figures
+        out = Path(output_dir) / "visualizations"
+        out.mkdir(parents=True, exist_ok=True)
+        for name, fig in figs.items():
+            vis.save_figure(fig, out / f"{name}.{save_format}", fmt=save_format)
 
-
-if __name__ == "__main__":
-    # Example usage with dummy data
-    np.random.seed(42)
-    
-    # Simulate reduced embeddings (2D)
-    n_docs = 500
-    embeddings_2d = np.random.randn(n_docs, 2)
-    
-    # Simulate cluster labels (3 topics + outliers)
-    labels = np.random.choice([0, 1, 2, -1], size=n_docs, p=[0.3, 0.3, 0.3, 0.1])
-    
-    # Simulate documents
-    documents = [f"Sample document {i}" for i in range(n_docs)]
-    
-    # Simulate topic words
-    topic_words = {
-        0: [("machine", 0.85), ("learning", 0.78), ("data", 0.65), ("model", 0.60), ("algorithm", 0.55)],
-        1: [("market", 0.80), ("stock", 0.75), ("invest", 0.70), ("price", 0.65), ("finance", 0.60)],
-        2: [("football", 0.82), ("game", 0.75), ("team", 0.68), ("player", 0.63), ("sport", 0.58)]
-    }
-    
-    visualizer = TopicVisualizer()
-    
-    # Create visualizations
-    fig1 = visualizer.plot_embeddings_2d(embeddings_2d, labels, documents)
-    fig2 = visualizer.plot_topic_distribution(labels)
-    fig3 = visualizer.plot_topic_words(topic_words, topic_id=0)
-    fig4 = visualizer.plot_all_topics_words(topic_words, n_topics=3, n_words=5)
-    
-    fig1.show()
-    
-    logger.info("Visualization examples created successfully")
+    return figs

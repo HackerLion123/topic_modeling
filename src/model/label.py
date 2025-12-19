@@ -298,11 +298,11 @@ class LLMTopicNamer:
                 + "Keep wording neutral unless sentiment is clearly indicated.\n"
             )
 
-        if use_case in {"customer_complaints", "costomer_complaints"}:
+        if use_case == 'customer_complaints':
             return (
                 base
                 + "Domain: Customer complaints.\n"
-                + "Emphasize the issue/failure mode (e.g., billing problems, delivery delays, defects, account access, poor support).\n"
+                + "Emphasize the issue (e.g., delivery delays, defects, quality issues).\n"
                 + "Use professional, objective phrasing.\n"
             )
 
@@ -360,25 +360,30 @@ class LLMTopicNamer:
                     temperature=self.temperature
                 )[0]['generated_text']
                 
-                print(prompt)
                 # Extract response (remove prompt)
                 response = result[len(prompt):].strip()
-                print("#"*50)
-                print(response)
-                print("#"*50)
+                
                 try:
                     parsed = json.loads(response)
                     name = parsed.get("topic_name", "").strip()
+                    reasoning = parsed.get("reasoning", "").strip()
                 except json.JSONDecodeError:
-                    match = re.search(r'"topic_name"\s*:\s*"([^"]+)"', response)
-                    name = match.group(1).strip() if match else ""
+                    name_match = re.search(r'"topic_name"\s*:\s*"([^"]+)"', response)
+                    reason_match = re.search(r'"reasoning"\s*:\s*"([^"]+)"', response)
+                    name = name_match.group(1).strip() if name_match else ""
+                    reasoning = reason_match.group(1).strip() if reason_match else ""
                 
-                topic_names[topic_id] = name if name else ", ".join([w if isinstance(w, str) else w[0] for w in words[:3]])
-                logger.info(f"Topic {topic_id}: {topic_names[topic_id]}")
+                if not name:
+                    name = ", ".join([w if isinstance(w, str) else w[0] for w in words[:3]])
+                if not reasoning:
+                    reasoning = f"Keywords: {keywords[:50]}"
+                topic_names[topic_id] = {"name": name, "reasoning": reasoning}
+                logger.info(f"Topic {topic_id}: {name} - {reasoning}")
                 
             except Exception as e:
                 logger.warning(f"Failed to name topic {topic_id}: {e}")
-                topic_names[topic_id] = "_".join([w for w, _ in words[:3]])
+                fallback_name = "_".join([w for w, _ in words[:3]])
+                topic_names[topic_id] = {"name": fallback_name, "reasoning": ""}
         
         return topic_names
     

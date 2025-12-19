@@ -35,7 +35,7 @@ class Settings:
     )
     
     LLM_CONFIG: dict = { # LLM to label topics
-        "model_name": "Qwen/Qwen3-8B",  # "Qwen/Qwen3-8B",  # Change as needed
+        "model_name": "Qwen/Qwen3-4B",  # "Qwen/Qwen3-8B",  # Change as needed
         "max_new_tokens": 80,
         "temperature": 0.1,
         "use_case": "customer_complaints"
@@ -92,8 +92,8 @@ class Settings:
     
     clustering_config: dict = { 
         "method": 'hdbscan',
-        "min_cluster_size": 3,
-        "min_samples": 2,
+        "min_cluster_size": 5,
+        "min_samples": 3,
         "metric": 'euclidean',
         "cluster_selection_method": 'eom',
         "random_state": SEED

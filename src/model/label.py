@@ -397,3 +397,287 @@ class LLMTopicNamer:
             tid: " & ".join([w for w, _ in words[:n]])
             for tid, words in topic_words.items()
         }
+        
+        
+class LLMTopicNamerFromDocuments:
+    """
+    LLM-based topic naming using representative documents.
+    
+    Generates descriptive topic names by analyzing actual documents
+    from each topic, providing richer context than keywords alone.
+    """
+
+    def __init__(
+        self,
+        model_name: str = None,
+        max_new_tokens: int = 30,
+        temperature: float = 0.3,
+        use_case: str = "customer_reviews",
+        n_representative_docs: int = 5, # To limit input size 
+        max_doc_length: int = 200,  # To limit input size
+        **kwargs,
+    ):
+        """
+        Initialize document-based LLM namer.
+
+        Args:
+            model_name: HuggingFace model name
+            max_new_tokens: Max tokens to generate
+            temperature: Lower = more focused
+            use_case: Domain context for better naming
+            n_representative_docs: Number of docs to show LLM per topic
+            max_doc_length: Max characters per document to include
+        """
+        self.model_name = model_name or config.LLM_CONFIG.get("model_name")
+        self.max_new_tokens = max_new_tokens
+        self.temperature = temperature
+        self.use_case = use_case
+        self.n_representative_docs = n_representative_docs
+        self.max_doc_length = max_doc_length
+        
+        self.prompt = self._system_prompt()
+        
+        logger.info(f"Initializing LLM (document-based): {self.model_name}")
+        
+        try:
+            device = get_device(verbose=False)
+            device_id = 0 if device.type in ["cuda", "mps"] else -1
+            
+            self.pipe = pipeline(
+                "text-generation",
+                model=self.model_name,
+                device=device_id,
+                dtype=torch.float16 if device.type == "cuda" else torch.float32,
+            )
+            logger.info("LLM initialized successfully")
+        except Exception as e:
+            logger.warning(f"LLM initialization failed: {e}")
+            self.pipe = None
+    
+    def _system_prompt(self) -> str:
+        base = (
+            "Task: Create a short, accurate topic label by analyzing representative documents.\n"
+            "Write a natural-sounding noun phrase that captures the main theme.\n"
+            "Be specific when the documents support it; do not invent details.\n"
+            "Avoid hype/marketing language. Avoid emojis.\n"
+            "Focus on what the documents are actually about, not their sentiment.\n"
+        )
+
+        use_case = (self.use_case or "").strip().lower()
+
+        if use_case == "customer_reviews":
+            return (
+                base
+                + "Domain: Customer reviews.\n"
+                + "Common themes: product quality, usability, fit/size, value/price, "
+                "shipping/delivery, packaging, customer support, returns/refunds, reliability.\n"
+                + "Keep wording neutral unless sentiment is clearly the main theme.\n"
+            )
+
+        if use_case == 'customer_complaints':
+            return (
+                base
+                + "Domain: Customer complaints.\n"
+                + "Emphasize the issue type (e.g., delivery delays, defects, quality issues).\n"
+                + "Use professional, objective phrasing.\n"
+            )
+
+        if use_case == "social_media":
+            return (
+                base
+                + "Domain: Social media.\n"
+                + "Focus on the discussion topic/event/campaign being discussed.\n"
+            )
+
+        return base + "Domain: General.\n"
+
+    def name_topics(
+        self,
+        documents: List[str],
+        labels: np.ndarray,
+        embeddings: Optional[np.ndarray] = None,
+        topic_words: Optional[Dict[int, List[Tuple[str, float]]]] = None,
+    ) -> Dict[int, Dict[str, str]]:
+        """
+        Generate topic names from representative documents.
+
+        Args:
+            documents: All documents
+            labels: Cluster labels for each document
+            embeddings: Document embeddings (used to find centroids)
+            topic_words: Optional keyword hints {topic_id: [(word, score), ...]}
+
+        Returns:
+            {topic_id: {"name": "Topic Name", "reasoning": "explanation"}}
+        """
+        if self.pipe is None:
+            return self._fallback_names(documents, labels, topic_words)
+        
+        topic_names = {}
+        unique_topics = sorted([t for t in set(labels) if t != -1])
+        
+        for topic_id in unique_topics:
+            topic_mask = labels == topic_id
+            topic_docs = [doc for doc, mask in zip(documents, topic_mask) if mask]
+            
+            representative_docs = self._select_representative_docs(
+                topic_docs, topic_mask, embeddings
+            )
+            
+            keywords_hint = ""
+            if topic_words and topic_id in topic_words:
+                top_keywords = [w if isinstance(w, str) else w[0] 
+                              for w in topic_words[topic_id][:10]]
+                keywords_hint = f"\nKey terms: {', '.join(top_keywords)}"
+            
+            prompt = self._build_prompt(representative_docs, keywords_hint)
+            
+            try:
+                result = self.pipe(
+                    prompt,
+                    max_new_tokens=self.max_new_tokens,
+                    temperature=self.temperature,
+                    do_sample=True if self.temperature > 0 else False,
+                )[0]['generated_text']
+                
+                response = result[len(prompt):].strip()
+                
+                try:
+                    parsed = json.loads(response)
+                    name = parsed.get("topic_name", "").strip()
+                    reasoning = parsed.get("reasoning", "").strip()
+                except json.JSONDecodeError:
+                    # Fallback regex parsing
+                    name_match = re.search(r'"topic_name"\s*:\s*"([^"]+)"', response)
+                    reason_match = re.search(r'"reasoning"\s*:\s*"([^"]+)"', response)
+                    name = name_match.group(1).strip() if name_match else ""
+                    reasoning = reason_match.group(1).strip() if reason_match else ""
+                
+                # Fallback if parsing failed
+                if not name:
+                    name = self._create_fallback_name(representative_docs, topic_words, topic_id)
+                if not reasoning:
+                    reasoning = f"Based on {len(representative_docs)} representative documents"
+                
+                topic_names[topic_id] = {"name": name, "reasoning": reasoning}
+                logger.info(f"Topic {topic_id}: {name} - {reasoning}")
+                
+            except Exception as e:
+                logger.warning(f"Failed to name topic {topic_id}: {e}")
+                fallback_name = self._create_fallback_name(representative_docs, topic_words, topic_id)
+                topic_names[topic_id] = {"name": fallback_name, "reasoning": ""}
+        
+        return topic_names
+    
+    def _select_representative_docs(
+        self,
+        topic_docs: List[str],
+        topic_mask: np.ndarray,
+        embeddings: Optional[np.ndarray] = None,
+    ) -> List[str]:
+        """
+        Select most representative documents for a topic.
+        
+        If embeddings available: select docs closest to centroid
+        Otherwise: select random sample
+        """
+        n_docs = min(self.n_representative_docs, len(topic_docs))
+        
+        if embeddings is not None and len(embeddings) == len(topic_mask):
+            # Get embeddings for this topic
+            topic_embeddings = embeddings[topic_mask]
+            
+            # Find centroid
+            centroid = topic_embeddings.mean(axis=0).reshape(1, -1)
+            
+            # Compute distances to centroid
+            distances = np.linalg.norm(topic_embeddings - centroid, axis=1)
+            
+            # Select closest documents
+            closest_indices = distances.argsort()[:n_docs]
+            representative = [topic_docs[i] for i in closest_indices]
+        else:
+            # Random sample if no embeddings
+            if len(topic_docs) <= n_docs:
+                representative = topic_docs
+            else:
+                import random
+                representative = random.sample(topic_docs, n_docs)
+        
+        # Truncate long documents
+        representative = [
+            doc[:self.max_doc_length] + "..." if len(doc) > self.max_doc_length else doc
+            for doc in representative
+        ]
+        
+        return representative
+    
+    def _build_prompt(self, documents: List[str], keywords_hint: str = "") -> str:
+        """Build prompt with representative documents."""
+        docs_text = "\n".join([
+            f"{i+1}. {doc}"
+            for i, doc in enumerate(documents)
+        ])
+        
+        prompt = (
+            f"{self.prompt}\n\n"
+            "You will be given representative documents from ONE topic.\n"
+            "Return ONLY a valid JSON object (no markdown, no code fences, no extra text).\n\n"
+            "JSON schema (exact keys):\n"
+            '{"topic_name": "2-6 words", "reasoning": "one short sentence"}\n\n'
+            "Constraints:\n"
+            "- topic_name: 2 to 6 words, descriptive, no trailing period\n"
+            "- reasoning: ONE short sentence (<= 20 words) explaining the common theme\n\n"
+            f"Representative documents:\n{docs_text}"
+            f"{keywords_hint}\n\n"
+            "JSON:"
+        )
+        
+        return prompt
+    
+    def _create_fallback_name(
+        self,
+        documents: List[str],
+        topic_words: Optional[Dict[int, List[Tuple[str, float]]]],
+        topic_id: int,
+    ) -> str:
+        """Create fallback name from keywords or document snippets."""
+        if topic_words and topic_id in topic_words:
+            # Use keywords if available
+            top_words = [w if isinstance(w, str) else w[0] 
+                        for w in topic_words[topic_id][:3]]
+            return " & ".join(top_words)
+        else:
+            # Extract common words from documents
+            from collections import Counter
+            import re
+            
+            all_words = []
+            for doc in documents[:3]:
+                words = re.findall(r'\b[a-z]{4,}\b', doc.lower())
+                all_words.extend(words)
+            
+            common_words = [word for word, _ in Counter(all_words).most_common(3)]
+            return " & ".join(common_words) if common_words else "Topic"
+    
+    def _fallback_names(
+        self,
+        documents: List[str],
+        labels: np.ndarray,
+        topic_words: Optional[Dict[int, List[Tuple[str, float]]]],
+    ) -> Dict[int, Dict[str, str]]:
+        """Simple fallback names when LLM unavailable."""
+        unique_topics = sorted([t for t in set(labels) if t != -1])
+        
+        fallback = {}
+        for topic_id in unique_topics:
+            topic_mask = labels == topic_id
+            topic_docs = [doc for doc, mask in zip(documents, topic_mask) if mask]
+            
+            name = self._create_fallback_name(topic_docs, topic_words, topic_id)
+            fallback[topic_id] = {
+                "name": name,
+                "reasoning": f"Fallback name from {len(topic_docs)} documents"
+            }
+        
+        return fallback

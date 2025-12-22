@@ -237,6 +237,7 @@ class TopicModelEvaluator:
             json.dump(metrics, f, indent=2)
         
         logger.info(f"Evaluation saved to {output_path}")
+        
 
 
 if __name__ == "__main__":
